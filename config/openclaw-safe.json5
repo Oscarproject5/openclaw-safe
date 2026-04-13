@@ -79,12 +79,6 @@
             "group:web",
           ],
 
-          sessions: {
-            // "self" — the SIA can only see its own current session.
-            // It cannot enumerate other sessions or learn about the watchdog/enforcer.
-            visibility: "self",
-          },
-
           elevated: {
             // Hard-disabled. The SIA must never gain elevated privileges.
             enabled: false,
@@ -100,16 +94,6 @@
           // available on the host. "all" means both main sessions and
           // sub-sessions are sandboxed.
           mode: "all",
-
-          // The workspace directory is bind-mounted read-write so the SIA can
-          // write its output. Everything else in the container is read-only.
-          // Requires Docker to be running; openclaw-safe setup will warn if not.
-          mounts: [
-            {
-              path: "~/.openclaw/workspaces/selfimprove",
-              mode: "rw",
-            },
-          ],
         },
       },
 
@@ -152,13 +136,6 @@
             "group:automation", // cron, gateway
             "message",
           ],
-
-          sessions: {
-            // "agent" — the watchdog can see sessions that belong to its own
-            // agent type. This lets multiple watchdog instances coordinate
-            // without exposing enforcer or SIA session details.
-            visibility: "agent",
-          },
 
           elevated: {
             enabled: false,
