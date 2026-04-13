@@ -1,0 +1,233 @@
+// openclaw-safe.json5
+// ─────────────────────────────────────────────────────────────────────────────
+// OpenClaw configuration template for the openclaw-safe package.
+// Implements a 3-layer safety architecture:
+//
+//   Layer 1 — self-improve (SIA)   : maximally restricted self-improvement agent
+//   Layer 2 — watchdog             : read-only observer, reads SIA session history
+//   Layer 3 — enforcer             : terminator, receives alerts and kills sessions
+//
+// Drop this into ~/.openclaw/openclaw.json (or merge into an existing config).
+// JSON5 is supported natively by OpenClaw's config loader.
+// ─────────────────────────────────────────────────────────────────────────────
+
+{
+  // ── Agent-wide defaults ───────────────────────────────────────────────────
+  // Applied to every agent in agents.list[] unless overridden per-agent.
+  agents: {
+    defaults: {
+      // Never elevate privileges by default; each agent must opt in explicitly.
+      // None of our agents opt in, so elevation is permanently off fleet-wide.
+      elevatedDefault: "off",
+
+      // "medium" thinking budget: enough for careful reasoning without runaway
+      // token spend during self-improvement loops.
+      thinkingDefault: "medium",
+
+      model: {
+        // claude-sonnet-4-6 balances capability and cost for tight feedback loops.
+        primary: "anthropic/claude-sonnet-4-6",
+      },
+    },
+
+    // ── Agent definitions ───────────────────────────────────────────────────
+    list: [
+
+      // ════════════════════════════════════════════════════════════════════════
+      // LAYER 1 — self-improve (SIA)
+      //
+      // The self-improvement agent. Writes skill files to its workspace and
+      // nothing else. It cannot discover other sessions, reach the network,
+      // run arbitrary processes, or alter the OpenClaw config it runs inside.
+      // Runs fully sandboxed in Docker when available.
+      // ════════════════════════════════════════════════════════════════════════
+      {
+        id: "self-improve",
+        name: "Self-Improvement Agent (SIA)",
+
+        // Isolated writable sandbox — the ONLY directory the SIA may write to.
+        // Corresponds to WORKSPACE_DIR in src/paths.mjs.
+        workspace: "~/.openclaw/workspaces/selfimprove",
+
+        tools: {
+          // Allow only direct filesystem operations inside the workspace.
+          // Everything not in this list is denied by the deny rules below.
+          allow: ["read", "write", "edit"],
+
+          // Deny everything that could affect the outside world:
+          //   • All session interaction  (cannot spawn, list, or message agents)
+          //   • Privilege escalation toggle
+          //   • Config editing (cannot rewrite its own constraints)
+          //   • All runtime / process execution (group:runtime = exec, process,
+          //     code_execution)
+          //   • All automation primitives (group:automation = cron, gateway)
+          //   • Direct cron / gateway references (belt-and-suspenders)
+          //   • Messaging primitives
+          //   • Web / network access
+          deny: [
+            "sessions_send",
+            "sessions_list",
+            "sessions_spawn",
+            "session_status",
+            "elevated_toggle",
+            "config_edit",
+            "group:runtime",   // exec, process, code_execution
+            "group:automation", // cron, gateway
+            "cron",            // explicit belt-and-suspenders
+            "gateway",         // explicit belt-and-suspenders
+            "message",
+            "group:web",
+          ],
+
+          sessions: {
+            // "self" — the SIA can only see its own current session.
+            // It cannot enumerate other sessions or learn about the watchdog/enforcer.
+            visibility: "self",
+          },
+
+          elevated: {
+            // Hard-disabled. The SIA must never gain elevated privileges.
+            enabled: false,
+          },
+        },
+
+        // No pre-installed skills. The SIA's entire job is to *produce* skill
+        // files in its workspace; it does not consume existing skills.
+        skills: [],
+
+        sandbox: {
+          // Run every SIA session inside a Docker container when Docker is
+          // available on the host. "all" means both main sessions and
+          // sub-sessions are sandboxed.
+          mode: "all",
+
+          // The workspace directory is bind-mounted read-write so the SIA can
+          // write its output. Everything else in the container is read-only.
+          // Requires Docker to be running; openclaw-safe setup will warn if not.
+          mounts: [
+            {
+              path: "~/.openclaw/workspaces/selfimprove",
+              mode: "rw",
+            },
+          ],
+        },
+      },
+
+      // ════════════════════════════════════════════════════════════════════════
+      // LAYER 2 — watchdog
+      //
+      // Read-only observer. Polls SIA session history and workspace files to
+      // detect policy violations, then forwards alerts to the enforcer.
+      // Cannot write anything — including the audit log it reads.
+      // ════════════════════════════════════════════════════════════════════════
+      {
+        id: "watchdog",
+        name: "Watchdog (Safety Observer)",
+
+        // Reads from the audit directory; does not write anything.
+        // Corresponds to AUDIT_DIR in src/paths.mjs.
+        workspace: "~/.openclaw/audit",
+
+        tools: {
+          // Allow only history inspection and file reading.
+          //   • sessions_history — read SIA session transcripts
+          //   • read             — inspect workspace files and audit logs
+          allow: ["sessions_history", "read"],
+
+          // Everything that could mutate state is denied:
+          //   • write / edit / exec — no filesystem writes or code execution
+          //   • sessions_send / sessions_spawn — cannot trigger new sessions
+          //   • Privilege escalation and config changes
+          //   • Full runtime and automation groups
+          //   • message — cannot directly send messages (uses enforcer for that)
+          deny: [
+            "write",
+            "edit",
+            "exec",
+            "sessions_send",
+            "sessions_spawn",
+            "elevated_toggle",
+            "config_edit",
+            "group:runtime",    // exec, process, code_execution
+            "group:automation", // cron, gateway
+            "message",
+          ],
+
+          sessions: {
+            // "agent" — the watchdog can see sessions that belong to its own
+            // agent type. This lets multiple watchdog instances coordinate
+            // without exposing enforcer or SIA session details.
+            visibility: "agent",
+          },
+
+          elevated: {
+            enabled: false,
+          },
+        },
+
+        // The "watchdog" skill contains the alert-detection and escalation logic
+        // bundled by openclaw-safe (see skills/watchdog/).
+        skills: ["watchdog"],
+      },
+
+      // ════════════════════════════════════════════════════════════════════════
+      // LAYER 3 — enforcer
+      //
+      // Terminator. Receives alert messages from the watchdog and issues
+      // sessions_send calls to kill offending SIA sessions. Can also read
+      // audit files to confirm the violation before acting.
+      // Has no write access; cannot spawn new sessions.
+      // ════════════════════════════════════════════════════════════════════════
+      {
+        id: "enforcer",
+        name: "Enforcer (Session Terminator)",
+
+        // Also works from the audit directory.
+        // Corresponds to AUDIT_DIR in src/paths.mjs.
+        workspace: "~/.openclaw/audit",
+
+        tools: {
+          // Allow only the minimum needed to act on alerts:
+          //   • sessions_send — send a kill/halt command to the SIA session
+          //   • read          — verify audit evidence before terminating
+          allow: ["sessions_send", "read"],
+
+          // Deny everything that could expand scope:
+          //   • write / edit / exec — no mutation of files or code
+          //   • sessions_list — cannot enumerate sessions (it acts on known IDs)
+          //   • sessions_spawn — cannot create new agent sessions
+          //   • Privilege escalation and config changes
+          //   • Full runtime and automation groups
+          deny: [
+            "write",
+            "edit",
+            "exec",
+            "sessions_list",
+            "sessions_spawn",
+            "elevated_toggle",
+            "config_edit",
+            "group:runtime",    // exec, process, code_execution
+            "group:automation", // cron, gateway
+          ],
+
+          elevated: {
+            enabled: false,
+          },
+        },
+
+        // The "enforcer" skill contains session-kill logic and action logging
+        // bundled by openclaw-safe (see skills/enforcer/).
+        skills: ["enforcer"],
+      },
+    ],
+  },
+
+  // ── Top-level command surface restrictions ──────────────────────────────
+  // Disable shell passthrough and config mutation from any interactive session.
+  // This prevents a user (or a compromised session) from bypassing the agent
+  // policy above via raw bash or config-edit commands.
+  commands: {
+    bash: false,    // no raw shell execution from the command surface
+    config: false,  // no in-session config editing
+  },
+}

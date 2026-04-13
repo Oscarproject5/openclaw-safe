@@ -1,0 +1,28 @@
+{
+  "name": "openclaw-safe",
+  "version": "1.0.0",
+  "description": "Defense-in-depth safe self-improvement harness for OpenClaw",
+  "type": "module",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "bin": {
+    "openclaw-safe": "./bin/openclaw-safe.mjs"
+  },
+  "scripts": {
+    "check": "node --check src/node-check.mjs && node --check src/paths.mjs && node --check signing/keygen.mjs && node --check signing/verify.mjs && node --check src/setup.mjs && node --check src/start.mjs && node --check src/sign.mjs && node --check src/audit.mjs && node --check bin/openclaw-safe.mjs && node --check skills/watchdog/patterns.mjs && node --check skills/enforcer/actions.mjs"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "dependencies": {
+    "json5": "^2.2.3"
+  },
+  "keywords": [
+    "openclaw",
+    "ai-safety",
+    "self-improvement",
+    "defense-in-depth"
+  ],
+  "license": "MIT"
+}
