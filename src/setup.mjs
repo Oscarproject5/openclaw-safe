@@ -82,7 +82,7 @@ export async function runSetup({ force = false } = {}) {
 
   // Check whether `openclaw` is on PATH.
   const whichCmd  = process.platform === "win32" ? "where" : "which";
-  const whichResult = spawnSync(whichCmd, ["openclaw"], { shell: true });
+  const whichResult = spawnSync(whichCmd, ["openclaw"]);
 
   if (whichResult.status !== 0) {
     console.log("\n  OpenClaw is not installed. Install it with:");

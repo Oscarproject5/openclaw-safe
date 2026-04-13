@@ -7,7 +7,7 @@
 
 import fs from "fs";
 import { join } from "path";
-import { execSync, spawn } from "child_process";
+import { execFileSync, execSync, spawn, spawnSync } from "child_process";
 
 import {
   PUBLISHED_SKILLS_DIR,
@@ -32,6 +32,30 @@ function sleep(ms) {
 }
 
 /**
+ * Resolve the full path to the `openclaw` binary so we can spawn without
+ * shell: true (avoids Node.js DEP0190 deprecation warning).
+ *
+ * @returns {string} Absolute path to the openclaw executable.
+ */
+function resolveOpenclawPath() {
+  const whichCmd = process.platform === "win32" ? "where" : "which";
+  const result = spawnSync(whichCmd, ["openclaw"]);
+  if (result.status !== 0) {
+    console.error("Error: openclaw not found on PATH.");
+    process.exit(1);
+  }
+  // `where` on Windows may return multiple lines; take the first.
+  return result.stdout.toString().trim().split(/\r?\n/)[0];
+}
+
+/** Cached openclaw binary path. */
+let _openclawBin;
+function getOpenclawBin() {
+  if (!_openclawBin) _openclawBin = resolveOpenclawPath();
+  return _openclawBin;
+}
+
+/**
  * Spawn an openclaw agent command detached so the parent process can exit
  * without waiting for the long-running agent session.
  *
@@ -42,10 +66,9 @@ function sleep(ms) {
  * @param {string[]} args  Arguments passed after `openclaw`.
  */
 function spawnDetached(label, args) {
-  const child = spawn("openclaw", args, {
+  const child = spawn(getOpenclawBin(), args, {
     detached: true,
     stdio: "ignore",
-    shell: true, // necessary on Windows for PATH resolution
   });
 
   child.once("error", (err) => {
@@ -143,14 +166,32 @@ export async function runStart() {
     console.log(`Signature verified: ${skillName}`);
   }
 
-  // OpenClaw gateway
+  // OpenClaw gateway — capture output to verify the RPC probe actually succeeded.
   console.log("\nChecking OpenClaw gateway...");
   try {
-    execSync("openclaw gateway status", { stdio: "inherit" });
-  } catch {
+    const statusOutput = execFileSync(getOpenclawBin(), ["gateway", "status"], {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    console.log(statusOutput);
+
+    // The gateway command may exit 0 even when the RPC probe fails.
+    // Check for explicit probe failure indicators in the output.
+    if (/RPC probe:\s*failed/i.test(statusOutput) ||
+        /gateway closed/i.test(statusOutput)) {
+      console.error(
+        `Error: OpenClaw gateway RPC probe failed.\n` +
+          `The gateway service may not be running. Try:\n` +
+          `  openclaw gateway start\n` +
+          `Then re-run: openclaw-safe start`
+      );
+      process.exit(1);
+    }
+  } catch (err) {
     console.error(
       `Error: OpenClaw gateway is not running or returned a non-zero exit code.\n` +
-        `Start the gateway before launching sessions.`
+        `Start the gateway before launching sessions.\n` +
+        (err.stderr ? err.stderr.toString() : "")
     );
     process.exit(1);
   }

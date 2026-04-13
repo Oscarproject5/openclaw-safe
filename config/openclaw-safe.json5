@@ -12,6 +12,20 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 {
+  // ── Config metadata ──────────────────────────────────────────────────────
+  // Required by OpenClaw for config versioning and validation.
+  meta: {
+    lastTouchedVersion: "2026.4.11",
+  },
+
+  // ── Gateway configuration ────────────────────────────────────────────────
+  // Local loopback gateway for agent session management.
+  gateway: {
+    mode: "local",
+    port: 18789,
+    bind: "loopback",
+  },
+
   // ── Agent-wide defaults ───────────────────────────────────────────────────
   // Applied to every agent in agents.list[] unless overridden per-agent.
   agents: {
