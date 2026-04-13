@@ -188,10 +188,22 @@ export async function runStart() {
       process.exit(1);
     }
   } catch (err) {
+    const stdout = err.stdout ? err.stdout.toString().trim() : "";
+    const stderr = err.stderr ? err.stderr.toString().trim() : "";
+    const code   = err.status ?? "unknown";
+
     console.error(
-      `Error: OpenClaw gateway is not running or returned a non-zero exit code.\n` +
-        `Start the gateway before launching sessions.\n` +
-        (err.stderr ? err.stderr.toString() : "")
+      `Error: OpenClaw gateway check failed (exit code ${code}).\n`
+    );
+    if (stdout) console.error(`── stdout ──\n${stdout}\n`);
+    if (stderr) console.error(`── stderr ──\n${stderr}\n`);
+    if (!stdout && !stderr) {
+      console.error(`  ${err.message}\n`);
+    }
+    console.error(
+      `The gateway may not be running. Try:\n` +
+        `  openclaw gateway start\n` +
+        `Then re-run: openclaw-safe start`
     );
     process.exit(1);
   }
